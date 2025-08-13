@@ -22,6 +22,7 @@ if(BUILD_TESTS)
     # Test executable
     add_executable(${PROJECT_NAME}_tests
         tests/DoubleBufferTests.cpp
+        tests/DoubleBufferBenchmark.cpp
     )
 
     find_package(Threads REQUIRED)

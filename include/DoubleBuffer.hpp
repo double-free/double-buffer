@@ -13,6 +13,8 @@ private:
     struct Buffer {
         T data;
         // mutable allows modification in const method
+        // conceptionally, since data is not changed, read() can be a const method
+        // but we need to modify ref_count, so it must be mutable
         mutable std::atomic<unsigned> ref_count{0};
     };
 
