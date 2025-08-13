@@ -10,7 +10,8 @@ class DoubleBuffer {
                  "T must be copy constructible");
 
 private:
-    struct Buffer {
+    // Buffer structure with padding (64 bytes) to prevent false sharing
+    struct alignas(64) Buffer {
         T data;
         // mutable allows modification in const method
         // conceptionally, since data is not changed, read() can be a const method
