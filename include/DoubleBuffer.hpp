@@ -1,5 +1,4 @@
 #include <atomic>
-#include <array>
 #include <thread>
 #include <type_traits>
 
@@ -20,14 +19,13 @@ private:
     };
 
     // double buffer storage, 2 copies.
-    std::array<Buffer, 2> buffers_;
-    
+    Buffer buffers_[2];
+
     // atomic read index (multiple readers)
-    std::atomic<int> read_index_{0};
+    std::atomic<Buffer*> read_buffer_{&buffers_[0]};
     
     // non-atomic write index (single writer)
-    int write_index_{1};
-
+    Buffer* write_buffer_{&buffers_[1]};
 public:
     // must provide init value for T
     explicit DoubleBuffer(const T& init_value) {
@@ -44,18 +42,28 @@ public:
      * @return Copy of the stored data
      */
     T read() const noexcept {
-        const int idx = read_index_.load(std::memory_order_acquire);
-        const Buffer& current = buffers_[idx];
+        // retry if copied read ptr does not match realtime read ptr
+        while (true) {
+            // Load the current read buffer
+            const Buffer* read_ptr = read_buffer_.load(std::memory_order_acquire);
 
-        // Increment reference count to protect buffer
-        current.ref_count.fetch_add(1, std::memory_order_acquire);
-        
-        T value = current.data;
+            // Increment reference count to protect buffer
+            read_ptr->ref_count.fetch_add(1, std::memory_order_relaxed);
+            
+            if (read_ptr != read_buffer_.load(std::memory_order_acquire)) {
+                // If the read pointer has changed, we need to retry
+                read_ptr->ref_count.fetch_sub(1, std::memory_order_relaxed);
+                continue; // Retry
+            }
 
-        // Decrement reference count when done
-        current.ref_count.fetch_sub(1, std::memory_order_release);
-        
-        return value;
+            // Copy the data to return
+            T value = read_ptr->data;
+
+            // Decrement reference count when done
+            read_ptr->ref_count.fetch_sub(1, std::memory_order_release);
+            
+            return value;
+        }
     }
 
     /**
@@ -64,15 +72,13 @@ public:
      */
     void write(const T& new_value) noexcept {
         // Update the write buffer (no readers access this yet)
-        buffers_[write_index_].data = new_value;
-        
+        write_buffer_->data = new_value;
+
         // Atomically swap read and write indices
-        const int old_read_index = read_index_.exchange(write_index_, std::memory_order_acq_rel);
-        write_index_ = old_read_index;
+        const Buffer* prev_read_ptr = read_buffer_.exchange(write_buffer_, std::memory_order_acq_rel);
 
         // Wait until all readers are done with the old buffer
-        Buffer& old_buffer = buffers_[old_read_index];
-        while (old_buffer.ref_count.load(std::memory_order_acquire) != 0) {
+        while (prev_read_ptr->ref_count.load(std::memory_order_acquire) != 0) {
             // Avoid busy waiting - yield CPU to other threads
             std::this_thread::yield();
         }
